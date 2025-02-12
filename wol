@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+
+import socket
+import struct
+import argparse
+import json
+import os
+from pathlib import Path
+
+class WoLManager:
+    def __init__(self):
+        # Create config directory in user's home folder
+        self.config_dir = Path.home() / '.wol'
+        self.config_file = self.config_dir / 'config.json'
+        self._ensure_config_exists()
+        
+    def _ensure_config_exists(self):
+        """Create config directory and file if they don't exist"""
+        self.config_dir.mkdir(exist_ok=True)
+        if not self.config_file.exists():
+            self._save_config({})
+    
+    def _load_config(self):
+        """Load the configuration file"""
+        try:
+            with open(self.config_file, 'r') as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            return {}
+    
+    def _save_config(self, config):
+        """Save the configuration file"""
+        with open(self.config_file, 'w') as f:
+            json.dump(config, f, indent=4)
+    
+    def save_device(self, name, mac_address):
+        """Save a device's MAC address with a name"""
+        config = self._load_config()
+        config[name] = mac_address
+        self._save_config(config)
+        print(f"Saved device '{name}' with MAC address {mac_address}")
+    
+    def remove_device(self, name):
+        """Remove a device from the configuration"""
+        config = self._load_config()
+        if name in config:
+            del config[name]
+            self._save_config(config)
+            print(f"Removed device '{name}'")
+        else:
+            print(f"Device '{name}' not found")
+    
+    def list_devices(self):
+        """List all saved devices"""
+        config = self._load_config()
+        if not config:
+            print("No devices saved")
+            return
+        print("\nSaved devices:")
+        for name, mac in config.items():
+            print(f"  {name}: {mac}")
+    
+    def get_mac(self, name):
+        """Get MAC address for a saved device"""
+        config = self._load_config()
+        return config.get(name)
+
+def send_magic_packet(mac_address, ip_address='255.255.255.255', port=9):
+    """Send a Wake-on-LAN magic packet"""
+    # Remove any delimiters from the MAC address and convert to bytes
+    mac_bytes = bytes.fromhex(mac_address.replace(':', ''))
+    
+    # Create the magic packet
+    magic_packet = struct.pack('!6B', *([0xFF] * 6))
+    magic_packet += mac_bytes * 16
+    
+    try:
+        # Create a UDP socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        
+        # Send the magic packet
+        sock.sendto(magic_packet, (ip_address, port))
+        print(f"Magic packet sent to {mac_address}")
+        
+    except Exception as e:
+        print(f"Error sending magic packet: {e}")
+        
+    finally:
+        sock.close()
+
+def main():
+    parser = argparse.ArgumentParser(description='Wake-on-LAN tool')
+    subparsers = parser.add_subparsers(dest='command', help='Commands')
+    
+    # Wake command
+    wake_parser = subparsers.add_parser('wake', help='Wake up a device')
+    wake_parser.add_argument('identifier', help='MAC address or saved device name')
+    wake_parser.add_argument('--ip', default='255.255.255.255', help='IP address (default: broadcast)')
+    wake_parser.add_argument('--port', type=int, default=9, help='Port number (default: 9)')
+    
+    # Save command
+    save_parser = subparsers.add_parser('save', help='Save a device')
+    save_parser.add_argument('name', help='Name for the device')
+    save_parser.add_argument('mac', help='MAC address')
+    
+    # Remove command
+    remove_parser = subparsers.add_parser('remove', help='Remove a saved device')
+    remove_parser.add_argument('name', help='Name of the device to remove')
+    
+    # List command
+    subparsers.add_parser('list', help='List saved devices')
+    
+    args = parser.parse_args()
+    manager = WoLManager()
+    
+    if args.command == 'wake':
+        # Check if the identifier is a saved device name
+        mac = manager.get_mac(args.identifier)
+        if mac is None:
+            # If not found in saved devices, treat as MAC address
+            mac = args.identifier
+        send_magic_packet(mac, args.ip, args.port)
+    
+    elif args.command == 'save':
+        manager.save_device(args.name, args.mac)
+    
+    elif args.command == 'remove':
+        manager.remove_device(args.name)
+    
+    elif args.command == 'list':
+        manager.list_devices()
+    
+    else:
+        parser.print_help()
+
+if __name__ == "__main__":
+    main()
